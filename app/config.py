@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     debug: bool = True
     
     # Database settings
-    database_url: str = "sqlite:///./dynamic_api.db"
+    database_url: str = "postgresql://user:password@localhost:5432/dynamic_api_db"
     
     # API settings
     api_prefix: str = "/api/v1"

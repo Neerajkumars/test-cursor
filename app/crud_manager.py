@@ -41,7 +41,8 @@ class DynamicCRUDManager:
             table = DynamicModelGenerator.create_sqlalchemy_table(name, schema, metadata)
             
             # Create the table in database
-            table.create(bind=sqlalchemy.create_engine(settings.database_url), checkfirst=True)
+            from .database import engine
+            table.create(bind=engine, checkfirst=True)
             
             # Create CRUD router
             router_options = self._get_router_options(options or {})
