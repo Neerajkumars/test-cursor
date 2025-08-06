@@ -50,39 +50,33 @@ class DynamicModelGenerator:
         properties = schema["properties"]
         required_fields = schema.get("required", [])
         
-        # Build field definitions
+        # Build field definitions using a simpler approach
         fields = {}
         
-        for field_name, field_schema in properties.items():
-            base_type = cls._get_pydantic_type(field_schema)
-            default_value = cls._get_default_value(field_schema, field_name in required_fields)
-            is_required = field_name in required_fields
-            
-            # Handle type optionality based on whether field is required
-            if is_required and default_value is ...:
-                # Required field without default
-                field_type = base_type
-                fields[field_name] = (field_type, Field(..., description=field_schema.get("description", "")))
-            else:
-                # Optional field or field with default
-                from typing import Union
-                if (hasattr(base_type, '__origin__') and base_type.__origin__ is Union) or \
-                   (sys.version_info >= (3, 8) and get_origin(base_type) is Union):
-                    # Already Optional/Union
-                    field_type = base_type
-                else:
-                    # Make it Optional
-                    field_type = Union[base_type, None]
-                
-                if default_value is ...:
-                    fields[field_name] = (field_type, Field(None, description=field_schema.get("description", "")))
-                else:
-                    fields[field_name] = (field_type, Field(default=default_value, description=field_schema.get("description", "")))
+        # Add id field first if not present
+        if "id" not in properties:
+            fields["id"] = (Optional[int], Field(None, description="Unique identifier"))
         
-        # Add id field if not present
-        if "id" not in fields:
-            from typing import Union
-            fields["id"] = (Union[int, None], Field(None, description="Unique identifier"))
+        for field_name, field_schema in properties.items():
+            # Get base Python type
+            python_type = cls._get_python_type_simple(field_schema)
+            is_required = field_name in required_fields
+            default_value = field_schema.get("default")
+            description = field_schema.get("description", "")
+            
+            # Handle field definition based on requirements and defaults
+            if is_required and default_value is None:
+                # Required field
+                fields[field_name] = (python_type, Field(..., description=description))
+            elif default_value is not None:
+                # Field with default value
+                if is_required:
+                    fields[field_name] = (python_type, Field(default=default_value, description=description))
+                else:
+                    fields[field_name] = (Optional[python_type], Field(default=default_value, description=description))
+            else:
+                # Optional field without default
+                fields[field_name] = (Optional[python_type], Field(None, description=description))
         
         # Create the model
         return create_model(name, **fields, __base__=base_class)
@@ -92,26 +86,26 @@ class DynamicModelGenerator:
         """Create a 'Create' version of the model (without id field)."""
         fields = {}
         
-        for field_name, field_info in base_model.model_fields.items():
+        # Get model schema to rebuild without id
+        model_schema = base_model.model_json_schema()
+        properties = model_schema.get("properties", {})
+        required_fields = model_schema.get("required", [])
+        
+        for field_name, field_props in properties.items():
             if field_name != "id":  # Exclude id field for create operations
-                # Pydantic v2 compatibility
-                field_type = field_info.annotation
+                # Determine the Python type from schema
+                python_type = cls._get_python_type_from_json_schema(field_props)
+                is_required = field_name in required_fields
+                default_value = field_props.get("default")
+                description = field_props.get("description", "")
                 
-                # Handle default values properly for Pydantic v2
-                if hasattr(field_info, 'default') and field_info.default is not ...:
-                    default_val = field_info.default
-                elif hasattr(field_info, 'default_factory') and field_info.default_factory is not None:
-                    default_val = Field(default_factory=field_info.default_factory)
+                # Create field definition
+                if is_required and default_value is None:
+                    fields[field_name] = (python_type, Field(..., description=description))
+                elif default_value is not None:
+                    fields[field_name] = (python_type, Field(default=default_value, description=description))
                 else:
-                    default_val = ...
-                
-                # Get description safely
-                description = getattr(field_info, 'description', '') or ''
-                
-                if default_val is ...:
-                    fields[field_name] = (field_type, Field(..., description=description))
-                else:
-                    fields[field_name] = (field_type, Field(default=default_val, description=description))
+                    fields[field_name] = (Optional[python_type], Field(None, description=description))
         
         return create_model(f"{name}Create", **fields)
     
@@ -139,6 +133,29 @@ class DynamicModelGenerator:
         
         table_name = f"dynamic_{name.lower()}"
         return sqlalchemy.Table(table_name, metadata, *columns)
+    
+    @classmethod
+    def _get_python_type_simple(cls, field_schema: Dict[str, Any]) -> Type:
+        """Get Python type for Pydantic model from field schema (simplified)."""
+        field_type = field_schema.get("type", "string")
+        
+        # Handle special formats
+        if field_type == "string":
+            format_type = field_schema.get("format")
+            if format_type == "datetime":
+                return datetime
+            elif format_type == "uuid":
+                return str
+            return str
+        
+        # Handle arrays
+        if field_type == "array":
+            items_schema = field_schema.get("items", {})
+            item_type = cls._get_python_type_simple(items_schema)
+            return List[item_type]
+        
+        # Get base type
+        return cls.TYPE_MAPPING.get(field_type, str)
     
     @classmethod
     def _get_pydantic_type(cls, field_schema: Dict[str, Any]) -> Type:
@@ -191,6 +208,31 @@ class DynamicModelGenerator:
                 return String(max_length)
         
         return cls.SQLALCHEMY_TYPE_MAPPING.get(field_type, String)
+    
+    @classmethod
+    def _get_python_type_from_json_schema(cls, json_schema: Dict[str, Any]) -> Type:
+        """Convert JSON schema property back to Python type."""
+        schema_type = json_schema.get("type", "string")
+        
+        if schema_type == "string":
+            json_format = json_schema.get("format")
+            if json_format == "date-time":
+                return datetime
+            return str
+        elif schema_type == "integer":
+            return int
+        elif schema_type == "number":
+            return float
+        elif schema_type == "boolean":
+            return bool
+        elif schema_type == "array":
+            items = json_schema.get("items", {})
+            item_type = cls._get_python_type_from_json_schema(items)
+            return List[item_type]
+        elif schema_type == "object":
+            return dict
+        else:
+            return str
     
     @classmethod
     def _get_default_value(cls, field_schema: Dict[str, Any], is_required: bool):

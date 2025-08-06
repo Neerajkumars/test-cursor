@@ -174,12 +174,28 @@ Run the included test suite:
 python test_api.py
 ```
 
+Or run the comprehensive usage examples:
+
+```bash
+python examples/api_usage.py
+```
+
 This will:
 1. Validate the service is running
 2. Test schema validation
-3. Create sample APIs
+3. Create sample APIs (products, users)
 4. Test CRUD operations
 5. List created APIs
+
+## 🔧 Troubleshooting
+
+### Pydantic v2 Compatibility
+The service is fully compatible with Pydantic v2. If you encounter `'FieldInfo' object has no attribute 'type_'` errors, make sure you're using the latest version with the fixes included.
+
+### Common Issues
+- **Database Connection**: Ensure PostgreSQL is running and accessible
+- **Port Conflicts**: Change ports in docker-compose.yml if 8000 or 5432 are in use
+- **Memory Issues**: Increase Docker memory if creating many large APIs
 
 ## 📊 JSON Schema Support
 
